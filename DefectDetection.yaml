@@ -1,0 +1,10 @@
+# DefectDetection.yaml
+path: F:\UserData\CODE_SPACE\DefectDetection\data  # 数据集的根目录
+train: train/images  # 训练集路径，相对于 path
+val: val/images      # 验证集路径，相对于 path
+test: test/images    # 测试集路径，相对于 path
+
+# 类别数量
+nc: 6
+# 类别名称列表（必须与您之前转换标签时使用的列表顺序完全一致）
+names: ['rust', 'burr', 'crack', 'scratch', 'dent', 'wear']

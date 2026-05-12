@@ -1,0 +1,5 @@
+{
+    "cmake.sourceDirectory": "F:/UserData/CODE_SPACE/DefectDetection/ultralytics-main-v11/examples/YOLOv8-CPP-Inference",
+    "python-envs.defaultEnvManager": "ms-python.python:venv",
+    "python-envs.defaultPackageManager": "ms-python.python:pip"
+}
