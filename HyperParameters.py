@@ -45,7 +45,6 @@ HyperParameters = Namespace (
     _2v0_RUN=Namespace (
         model='yolo11_fix_2.yaml',
         batch=32,
-        iou=0.7, 
         project='runs/train/_2v0_RUN',
         **TrainHyperParameters.FullRounds.__dict__,
     ),
