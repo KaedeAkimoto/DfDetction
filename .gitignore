@@ -19,3 +19,11 @@ runs/
 *.pth
 yolo11.yaml
 yolo11n.pt
+*.txt
+*.7z
+*.backup
+val_filter.py
+miss/
+DD_ori_data/
+augmented/
+.*/
