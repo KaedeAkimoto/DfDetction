@@ -19,10 +19,11 @@ def train_loop(train_models: Iterable[Namespace]):
         single_train(train_model)
 
 
-def increment_single_train(train_model: Namespace, epochs: int):
+def increment_single_train(train_model: Namespace, epochs: int, times: int | None = None):
     backup = train_model.epochs
     train_model.epochs = epochs
-    resume_weight = train_model.project + "/train3/weights/last.pt"
+    weight = "/train/weights/last.pt" if times is None else f"/train{times}/weights/best.pt" 
+    resume_weight = train_model.project + weight
 
     model = YOLO(resume_weight)
     model.train(
@@ -31,14 +32,10 @@ def increment_single_train(train_model: Namespace, epochs: int):
     train_model.epochs = backup
     model.val()
 
+
 def main():
     multiprocessing.freeze_support()
-    # train_loop([
-    #     HyperParameters._1v0_RUN,
-    #     HyperParameters._1v1_RUN,
-    #     HyperParameters._2v0_RUN,
-    # ])
-    increment_single_train(HyperParameters._2v0_RUN, 100)
+    single_train(HyperParameters._4v0_RUN)
 
 
 if __name__ == '__main__':
