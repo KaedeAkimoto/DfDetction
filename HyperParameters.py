@@ -89,8 +89,6 @@ HyperParameters = Namespace (
         hsv_v=0.5,
         mixup=0.1,
         copy_paste=0.1,
-        inner_iou=True,
-        inner_ratio=0.7,
         project='runs/train/_5v0_RUN',
         **TrainHyperParameters.ExtendedRounds.__dict__,
     ),

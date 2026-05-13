@@ -8,6 +8,8 @@ from argparse import Namespace
 def single_train(train_model: Namespace):
     model = YOLO(train_model.model)
     model.load("yolo11n.pt")
+    model.model.args['inner_iou'] = True
+    model.model.args['inner_ratio'] = 0.7
     model.train(
         **train_model.__dict__,
     )
