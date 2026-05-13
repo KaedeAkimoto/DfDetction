@@ -1,43 +1,61 @@
 from HyperParameters import HyperParameters
 from ultralytics import YOLO
 import multiprocessing
-from collections.abc import Iterable
+from collections.abc import Iterable, Callable
+from typing import Any, Annotated
 from argparse import Namespace
 
 
-def single_train(train_model: Namespace):
+yolo_result_set = Annotated[Any, "results of model.train/model.val"]
+results_tuple = Annotated[tuple[yolo_result_set, yolo_result_set], "(model.train, model.val)"]
+
+
+def export_model(model: YOLO, results: results_tuple, fmt: str = 'onnx') -> results_tuple:
+    model.export(format=fmt)
+    return results
+
+
+def train(
+        train_model: Namespace, 
+        controls: Callable[[YOLO, dict], Any] = lambda model, params: None, 
+        load_weight: bool = False,
+        after_train: Callable[[YOLO, results_tuple], Any] = export_model
+    ) -> results_tuple | Any:
+    assert train_model.model is not None, "model is None"
+    
     model = YOLO(train_model.model)
-    model.load("yolo11n.pt")
-    model.model.args['inner_iou'] = True
-    model.model.args['inner_ratio'] = 0.7
-    model.train(
-        **train_model.__dict__,
+    if load_weight:
+        assert train_model.load_weight is not None, "load_weight is None"
+        model.load(train_model.load_weight)
+    else: 
+        model.load("yolo11n.pt")
+    
+    train_params = train_model.__dict__
+    controls(model, train_model.control_params)
+    multiprocessing.freeze_support()
+    train_params.pop('control_params', None)
+    train_params.pop('load_weight', None)
+    train_params.pop("model", None)
+    train_results = model.train(
+        **train_params,
     )
-    model.val()
+    val_results = model.val()
+    results = (train_results, val_results)
+    rtv = results
+    try:
+        rtv = after_train(model, results)
 
+    except Exception as e:
+        print("after_train failed")
+        repr(e)
 
-def train_loop(train_models: Iterable[Namespace]):
-    for train_model in train_models:
-        single_train(train_model)
-
-
-def increment_single_train(train_model: Namespace, epochs: int, times: int | None = None):
-    backup = train_model.epochs
-    train_model.epochs = epochs
-    weight = "/train/weights/last.pt" if times is None else f"/train{times}/weights/best.pt" 
-    resume_weight = train_model.project + weight
-
-    model = YOLO(resume_weight)
-    model.train(
-        **train_model.__dict__,
-    )
-    train_model.epochs = backup
-    model.val()
+    finally:
+        return rtv
 
 
 def main():
-    multiprocessing.freeze_support()
-    single_train(HyperParameters._5v0_RUN)
+    
+    train(HyperParameters._5v0_RUN, lambda model, params: model.model.args.update(params))
 
 
 if __name__ == '__main__':

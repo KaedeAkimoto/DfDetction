@@ -1,5 +1,6 @@
+from matplotlib.pyplot import tick_params
 from argparse import Namespace
-
+from typing import Any
 
 BaseModelParameters = Namespace (
         imgsz=640, 
@@ -24,6 +25,7 @@ TrainHyperParameters = Namespace (
     ),
 )
 
+def package_params(**kwargs) -> dict[str, Any]: return kwargs
 
 
 HyperParameters = Namespace (
@@ -91,5 +93,9 @@ HyperParameters = Namespace (
         copy_paste=0.1,
         project='runs/train/_5v0_RUN',
         **TrainHyperParameters.ExtendedRounds.__dict__,
+        control_params=package_params(
+            inner_iou=True,
+            inner_ratio=0.7,
+        ),
     ),
 )
