@@ -35,7 +35,7 @@ def increment_single_train(train_model: Namespace, epochs: int, times: int | Non
 
 def main():
     multiprocessing.freeze_support()
-    single_train(HyperParameters._4v0_RUN)
+    single_train(HyperParameters._5v0_RUN)
 
 
 if __name__ == '__main__':

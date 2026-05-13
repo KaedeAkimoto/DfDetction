@@ -49,6 +49,8 @@ __all__ = (
     "Attention",
     "PSA",
     "SCDown",
+    "LSKBlock",
+    "C2fLSK",
 )
 
 
@@ -1003,42 +1005,109 @@ class C2PSA(nn.Module):
     """
     C2PSA module with attention mechanism for enhanced feature extraction and processing.
 
-    This module implements a convolutional block with attention mechanisms to enhance feature extraction and processing
-    capabilities. It includes a series of PSABlock modules for self-attention and feed-forward operations.
+    This module implements a convolutional block with attention mechanism to enhance feature extraction
+    capabilities with PSA (Position-Sensitive Attention) mechanism.
 
     Attributes:
         c (int): Number of hidden channels.
         cv1 (Conv): 1x1 convolution layer to reduce the number of input channels to 2*c.
-        cv2 (Conv): 1x1 convolution layer to reduce the number of output channels to c.
-        m (nn.Sequential): Sequential container of PSABlock modules for attention and feed-forward operations.
+        cv2 (Conv): 1x1 convolution layer to reduce the number of output channels to c1.
+        m (nn.Sequential): Sequential container of PSABlock modules for attention processing.
 
     Methods:
-        forward: Performs a forward pass through the C2PSA module, applying attention and feed-forward operations.
-
-    Notes:
-        This module essentially is the same as PSA module, but refactored to allow stacking more PSABlock modules.
+        forward: Performs forward pass through the C2PSA module.
 
     Examples:
-        >>> c2psa = C2PSA(c1=256, c2=256, n=3, e=0.5)
+        >>> import torch
+        >>> c2psa = C2PSA(c1=256, c2=256, n=1, e=0.5)
         >>> input_tensor = torch.randn(1, 256, 64, 64)
         >>> output_tensor = c2psa(input_tensor)
     """
 
     def __init__(self, c1, c2, n=1, e=0.5):
-        """Initializes the C2PSA module with specified input/output channels, number of layers, and expansion ratio."""
+        """Initializes the C2PSA module with attention mechanism for enhanced feature extraction."""
         super().__init__()
         assert c1 == c2
         self.c = int(c1 * e)
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv(2 * self.c, c1, 1)
-
         self.m = nn.Sequential(*(PSABlock(self.c, attn_ratio=0.5, num_heads=self.c // 64) for _ in range(n)))
 
     def forward(self, x):
-        """Processes the input tensor 'x' through a series of PSA blocks and returns the transformed tensor."""
-        a, b = self.cv1(x).split((self.c, self.c), dim=1)
-        b = self.m(b)
-        return self.cv2(torch.cat((a, b), 1))
+        """Forward pass through C2PSA module."""
+        a, b = self.cv1(x).split((self.c, self.c), 1)
+        return self.cv2(torch.cat((a, self.m(b)), 1))
+
+
+class LSKBlock(nn.Module):
+    """
+    LSKBlock - Large Selective Kernel Network block.
+
+    Dynamically adjusts receptive field using multiple large depthwise convolutions
+    with a spatial selection mechanism. Based on:
+    "Large Selective Kernel Network for Remote Sensing Object Detection" (ICCV 2023)
+
+    Attributes:
+        c (int): Number of input/output channels.
+        dw_convs (nn.ModuleList): List of depthwise convolutions with different kernel sizes.
+        conv_fuse (nn.Sequential): Spatial selection mechanism to weight different kernel responses.
+        conv_out (Conv): 1x1 convolution for output projection.
+    """
+
+    def __init__(self, c):
+        """Initializes LSKBlock with given channel size."""
+        super().__init__()
+        self.dw_conv5 = DWConv(c, c, k=5, s=1, d=1, act=False)
+        self.dw_conv7 = DWConv(c, c, k=7, s=1, d=1, act=False)
+        self.dw_conv9 = DWConv(c, c, k=9, s=1, d=1, act=False)
+        self.dw_conv11 = DWConv(c, c, k=11, s=1, d=1, act=False)
+
+        # Spatial selection mechanism
+        self.conv_fuse = nn.Sequential(
+            nn.Conv2d(c * 4, c // 4, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c // 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(c // 4, 4, kernel_size=1, bias=False),
+            nn.Sigmoid(),
+        )
+
+        self.conv_out = Conv(c, c, k=1, s=1, act=True)
+
+    def forward(self, x):
+        """Forward pass through LSKBlock with dynamic spatial selection."""
+        feat5 = self.dw_conv5(x)
+        feat7 = self.dw_conv7(x)
+        feat9 = self.dw_conv9(x)
+        feat11 = self.dw_conv11(x)
+
+        feats = torch.cat([feat5, feat7, feat9, feat11], dim=1)
+        attn = self.conv_fuse(feats)
+
+        out = feat5 * attn[:, 0:1] + feat7 * attn[:, 1:2] + feat9 * attn[:, 2:3] + feat11 * attn[:, 3:4]
+        out = self.conv_out(out)
+        return out + x
+
+
+class C2fLSK(nn.Module):
+    """
+    C2f module with LSKBlock attention for enhanced multi-scale feature extraction.
+
+    Replaces standard Bottleneck blocks with LSKBlocks for dynamic receptive field adjustment.
+    """
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        """Initializes C2fLSK module with LSKBlock attention."""
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(LSKBlock(self.c) for _ in range(n))
+
+    def forward(self, x):
+        """Forward pass through C2fLSK layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
 
 
 class C2fPSA(C2f):

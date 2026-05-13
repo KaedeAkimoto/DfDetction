@@ -56,6 +56,8 @@ from .block import (
     RepVGGDW,
     ResNetLayer,
     SCDown,
+    LSKBlock,
+    C2fLSK,
 )
 from .conv import (
     CBAM,
@@ -64,6 +66,7 @@ from .conv import (
     Conv,
     Conv2,
     ConvTranspose,
+    CoordAtt,
     DWConv,
     DWConvTranspose2d,
     Focus,

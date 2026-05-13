@@ -19,6 +19,7 @@ __all__ = (
     "ChannelAttention",
     "SpatialAttention",
     "CBAM",
+    "CoordAtt",
     "Concat",
     "RepConv",
 )
@@ -301,7 +302,7 @@ class SpatialAttention(nn.Module):
         self.act = nn.Sigmoid()
 
     def forward(self, x):
-        """Apply channel and spatial attention on input for feature recalibration."""
+        """Apply channel and spatial attention on input."""
         return x * self.act(self.cv1(torch.cat([torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]], 1)))
 
 
@@ -315,8 +316,61 @@ class CBAM(nn.Module):
         self.spatial_attention = SpatialAttention(kernel_size)
 
     def forward(self, x):
-        """Applies the forward pass through C1 module."""
+        """Applies the forward pass through attention module."""
         return self.spatial_attention(self.channel_attention(x))
+
+
+class CoordAtt(nn.Module):
+    """
+    Coordinate Attention module.
+
+    Embeds position information into channel attention by encoding horizontal and vertical
+    spatial relationships. Based on: "Coordinate Attention for Efficient Mobile Network Design" (CVPR 2021)
+
+    Attributes:
+        pool_h (nn.AdaptiveAvgPool2d): Adaptive average pooling for height dimension.
+        pool_w (nn.AdaptiveAvgPool2d): Adaptive average pooling for width dimension.
+        conv1 (Conv): 1x1 convolution for reducing channels.
+        conv_h (nn.Conv2d): 1x1 convolution for height attention.
+        conv_w (nn.Conv2d): 1x1 convolution for width attention.
+        act (nn.SiLU): Activation function.
+    """
+
+    def __init__(self, inp, oup, reduction=32):
+        """Initialize CoordAtt with input channels, output channels, and reduction ratio."""
+        super().__init__()
+        mip = max(8, inp // reduction)
+
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+
+        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn1 = nn.BatchNorm2d(mip)
+        self.act = nn.SiLU()
+
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0, bias=False)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0, bias=False)
+
+    def forward(self, x):
+        """Forward pass through Coordinate Attention."""
+        identity = x
+        n, c, h, w = x.size()
+
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
+
+        return identity * a_w * a_h
 
 
 class Concat(nn.Module):

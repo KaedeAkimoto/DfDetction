@@ -29,6 +29,7 @@ from ultralytics.nn.modules import (
     C2f,
     C2fAttn,
     C2fCIB,
+    C2fLSK,
     C2fPSA,
     C3Ghost,
     C3k2,
@@ -41,6 +42,7 @@ from ultralytics.nn.modules import (
     Conv,
     Conv2,
     ConvTranspose,
+    CoordAtt,
     Detect,
     DWConv,
     DWConvTranspose2d,
@@ -50,6 +52,7 @@ from ultralytics.nn.modules import (
     HGBlock,
     HGStem,
     ImagePoolingAttn,
+    LSKBlock,
     Pose,
     RepC3,
     RepConv,
@@ -981,6 +984,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2,
             C2f,
             C3k2,
+            C2fLSK,
             RepNCSPELAN4,
             ELAN1,
             ADown,
@@ -997,6 +1001,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             PSA,
             SCDown,
             C2fCIB,
+            CoordAtt,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1014,6 +1019,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2,
                 C2f,
                 C3k2,
+                C2fLSK,
                 C2fAttn,
                 C3,
                 C3TR,
