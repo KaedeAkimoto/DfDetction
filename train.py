@@ -4,6 +4,7 @@ import multiprocessing
 from collections.abc import Iterable, Callable
 from typing import Any, Annotated
 from argparse import Namespace
+from pathlib import Path
 
 
 yolo_result_set = Annotated[Any, "results of model.train/model.val"]
@@ -19,16 +20,22 @@ def train(
         train_model: Namespace, 
         controls: Callable[[YOLO, dict], Any] = lambda model, params: None, 
         load_weight: bool = False,
+        resume: bool = False,
         after_train: Callable[[YOLO, results_tuple], Any] = export_model
     ) -> results_tuple | Any:
     assert train_model.model is not None, "model is None"
     
-    model = YOLO(train_model.model)
-    if load_weight:
-        assert train_model.load_weight is not None, "load_weight is None"
-        model.load(train_model.load_weight)
-    else: 
-        model.load("yolo11n.pt")
+    if resume:
+        last_ckpt = Path(train_model.project) / "train" / "weights" / "last.pt"
+        assert last_ckpt.exists(), f"Checkpoint not found: {last_ckpt}"
+        model = YOLO(str(last_ckpt))
+    else:
+        model = YOLO(train_model.model)
+        if load_weight:
+            assert train_model.load_weight is not None, "load_weight is None"
+            model.load(train_model.load_weight)
+        else: 
+            model.load("yolo11n.pt")
     
     train_params = train_model.__dict__
     controls(model, train_model.control_params)
@@ -37,6 +44,7 @@ def train(
     train_params.pop('load_weight', None)
     train_params.pop("model", None)
     train_results = model.train(
+        resume=resume,
         **train_params,
     )
     val_results = model.val()
@@ -54,8 +62,7 @@ def train(
 
 
 def main():
-    
-    train(HyperParameters._5v0_RUN, lambda model, params: model.model.args.update(params))
+    train(HyperParameters._5v0_RUN, lambda model, params: model.model.args.update(params), resume=True)
 
 
 if __name__ == '__main__':
