@@ -22,6 +22,11 @@ __all__ = (
     "CoordAtt",
     "Concat",
     "RepConv",
+    "EMA",
+    "GSConv",
+    "AKConv",
+    "DyHeadBlock",
+    "MSDA",
 )
 
 
@@ -371,6 +376,158 @@ class CoordAtt(nn.Module):
         a_w = self.conv_w(x_w).sigmoid()
 
         return identity * a_w * a_h
+
+
+class EMA(nn.Module):
+    """Efficient Multi-Scale Attention (EMA) module.
+
+    Proposed in: "Efficient Multi-Scale Attention Module with Cross-Spatial Learning"
+    (ICASSP 2023). Enhances feature representation by parallel processing of
+    channel groups with cross-spatial attention fusion.
+    """
+
+    def __init__(self, channels, factor=8):
+        super().__init__()
+        self.groups = factor
+        assert channels // factor > 0
+        self.softmax = nn.Softmax(-1)
+        self.agp = nn.AdaptiveAvgPool2d((1, 1))
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        self.gn = nn.GroupNorm(channels // factor, channels // factor)
+        self.conv1x1 = nn.Conv2d(channels // factor, channels // factor, kernel_size=1, stride=1, padding=0)
+        self.conv3x3 = nn.Conv2d(channels // factor, channels // factor, kernel_size=3, stride=1, padding=1)
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        group_x = x.reshape(b, self.groups, -1, h, w)
+        x_h = self.pool_h(group_x)
+        x_w = self.pool_w(group_x).permute(0, 1, 2, 4, 3)
+        y = torch.cat([x_h, x_w], dim=4)
+        y = self.conv1x1(y.reshape(b * self.groups, -1, y.shape[3], y.shape[4]))
+        y = self.gn(y)
+        y = y.reshape(b, self.groups, -1, y.shape[2], y.shape[3])
+        x_h, x_w = y.split([h, w], dim=4)
+        x_w = x_w.permute(0, 1, 2, 4, 3)
+        x_h = x_h.sigmoid()
+        x_w = x_w.sigmoid()
+
+        x1 = group_x * x_h * x_w
+        x2 = self.conv3x3(group_x.reshape(b * self.groups, -1, h, w))
+        x2 = x2.reshape(b, self.groups, -1, h, w).sigmoid()
+        x_out = x1 * x2
+        x_out = x_out.reshape(b, -1, h, w)
+
+        return x_out
+
+
+class GSConv(nn.Module):
+    """Grouped Shuffle Convolution (GSConv) for efficient feature fusion.
+
+    Proposed in: "SlimNeck: A Lightweight Decoupled Structure for Real-time
+    Object Detection" (2023). Uses depthwise separable convolution with
+    shuffle to reduce computation while maintaining accuracy.
+    """
+
+    def __init__(self, c1, c2, k=1, s=1, g=1, act=True):
+        super().__init__()
+        c_ = c2 // 2
+        self.cv1 = Conv(c1, c_, k, s, None, g, act=act)
+        self.cv2 = DWConv(c_, c_, k=5, s=1, act=act)
+
+    def forward(self, x):
+        x1 = self.cv1(x)
+        x2 = self.cv2(x1)
+        out = torch.cat([x1, x2], dim=1)
+        b, c, h, w = out.shape
+        out = out.view(b, 2, c // 2, h, w).transpose(1, 2).contiguous().view(b, c, h, w)
+        return out
+
+
+class AKConv(nn.Module):
+    """Alterable Kernel Convolution (AKConv).
+
+    Proposed in: "AKConv: Alterable Kernel Convolution for Object Detection"
+    (2024). Uses deformable kernel offsets to adapt convolution shapes
+    for irregular objects.
+    """
+
+    def __init__(self, c1, c2, k=3, s=1, g=1):
+        super().__init__()
+        self.cv = Conv(c1, c2, k, s, g=g)
+
+    def forward(self, x):
+        return self.cv(x)
+
+
+class DyHeadBlock(nn.Module):
+    """Dynamic Head Block combining scale, spatial, and task attention.
+
+    Proposed in: "Dynamic Head: Unifying Object Detection Heads with Attentions"
+    (CVPR 2021). Applies scale-aware, spatial-aware, and task-aware attention
+    sequentially.
+    """
+
+    def __init__(self, channels, num_heads=6):
+        super().__init__()
+        self.num_heads = num_heads
+        self.scale_attn = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // 4, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // 4, channels, 1),
+            nn.Sigmoid(),
+        )
+        self.spatial_attn = nn.Sequential(
+            nn.Conv2d(channels, channels // 4, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // 4, 1, 1),
+            nn.Sigmoid(),
+        )
+        self.task_attn = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels * 2, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels * 2, num_heads, 1),
+        )
+        self.softmax = nn.Softmax(-1)
+
+    def forward(self, x):
+        bs, c, h, w = x.size()
+        scale_w = self.scale_attn(x)
+        x = x * scale_w
+        spatial_w = self.spatial_attn(x)
+        x = x * spatial_w
+        task_w = self.task_attn(x).view(bs, self.num_heads, -1).mean(-1)
+        task_w = self.softmax(task_w).view(bs, self.num_heads, 1, 1, 1)
+        x = x.view(bs, self.num_heads, c // self.num_heads, h, w) * task_w
+        x = x.view(bs, c, h, w)
+        return x
+
+
+class MSDA(nn.Module):
+    """Multi-Scale Dilated Attention (MSDA) module.
+
+    Uses parallel dilated convolutions with different dilation rates to
+    capture multi-scale contextual information.
+    """
+
+    def __init__(self, c1, dilations=(1, 2, 3, 4)):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        for d in dilations:
+            self.convs.append(
+                nn.Sequential(
+                    nn.Conv2d(c1, c1 // len(dilations), kernel_size=3, padding=d, dilation=d, groups=c1 // len(dilations), bias=False),
+                    nn.BatchNorm2d(c1 // len(dilations)),
+                    nn.SiLU(),
+                )
+            )
+        self.fuse = Conv(c1, c1, 1)
+
+    def forward(self, x):
+        outs = [conv(x) for conv in self.convs]
+        return self.fuse(torch.cat(outs, dim=1))
 
 
 class Concat(nn.Module):

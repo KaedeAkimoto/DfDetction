@@ -64,6 +64,18 @@ from ultralytics.nn.modules import (
     Segment,
     WorldDetect,
     v10Detect,
+    C2fEMA,
+    C2fGSConv,
+    C2fAKConv,
+    BiFormerBlock,
+    C2fBiFormer,
+    C2fDBB,
+    C2PSA_MSDA,
+    EMA,
+    GSConv,
+    AKConv,
+    DyHeadBlock,
+    MSDA,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1002,6 +1014,14 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             SCDown,
             C2fCIB,
             CoordAtt,
+            C2fEMA,
+            C2fGSConv,
+            C2fAKConv,
+            C2fBiFormer,
+            C2fDBB,
+            C2PSA_MSDA,
+            GSConv,
+            AKConv,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1029,12 +1049,20 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2fPSA,
                 C2fCIB,
                 C2PSA,
+                C2fEMA,
+                C2fGSConv,
+                C2fAKConv,
+                C2fBiFormer,
+                C2fDBB,
+                C2PSA_MSDA,
             }:
                 args.insert(2, n)  # number of repeats
                 n = 1
             if m is C3k2 and scale in "mlx":  # for M/L/X sizes
                 args[3] = True
         elif m is AIFI:
+            args = [ch[f], *args]
+        elif m is DyHeadBlock:
             args = [ch[f], *args]
         elif m is CBAM:
             args = [ch[f]] + (args if args else [7])

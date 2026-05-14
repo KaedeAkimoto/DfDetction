@@ -71,7 +71,9 @@ def box_iou(box1, box2, eps=1e-7):
     return inter / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - inter + eps)
 
 
-def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, Inner=False, ratio=0.7, eps=1e-7):
+def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, Inner=False, ratio=0.7,
+             WIoU=False, ShapeIoU=False, MPDIoU=False, NWD=False,
+             eps=1e-7):
     """
     Calculate Intersection over Union (IoU) of box1(1, 4) to box2(n, 4).
 
@@ -85,10 +87,14 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, Inner=Fa
         CIoU (bool, optional): If True, calculate Complete IoU. Defaults to False.
         Inner (bool, optional): If True, use Inner-IoU with auxiliary bounding boxes. Defaults to False.
         ratio (float, optional): Scale factor for Inner-IoU auxiliary bounding boxes. Defaults to 0.7.
+        WIoU (bool, optional): If True, use Wise-IoU v3 with dynamic focusing. Defaults to False.
+        ShapeIoU (bool, optional): If True, use Shape-IoU considering shape and scale. Defaults to False.
+        MPDIoU (bool, optional): If True, use MPDIoU based on minimum point distance. Defaults to False.
+        NWD (bool, optional): If True, use Normalized Wasserstein Distance for small objects. Defaults to False.
         eps (float, optional): A small value to avoid division by zero. Defaults to 1e-7.
 
     Returns:
-        (torch.Tensor): IoU, GIoU, DIoU, CIoU, or Inner-IoU values depending on the specified flags.
+        (torch.Tensor): IoU, GIoU, DIoU, CIoU, or other IoU values depending on the specified flags.
     """
     # Get the coordinates of bounding boxes
     if xywh:  # transform from xywh to xyxy
@@ -125,6 +131,62 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, Inner=Fa
 
     # IoU
     iou = inter / union
+
+    # WIoU v3 (Wise-IoU with dynamic non-monotonic focusing)
+    if WIoU:
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)
+        c2 = cw.pow(2) + ch.pow(2) + eps
+        rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4
+        wiou = 1 - iou + (rho2 / c2)
+        # Dynamic non-monotonic focusing mechanism (WIoU v3)
+        with torch.no_grad():
+            r = wiou.detach() / wiou.mean()
+            beta = r / (r.mean() + eps)
+            focusing = (beta / (beta + 1)).pow(0.5)
+        iou = wiou * focusing
+        if Inner:
+            return iou * inner_iou
+        return iou
+
+    # Shape-IoU
+    if ShapeIoU:
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)
+        c2 = cw.pow(2) + ch.pow(2) + eps
+        rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4
+        # Shape-aware term
+        ww = 2 * (w2 / w1).pow(2) / (w1.pow(2) + w2.pow(2) + eps)
+        hh = 2 * (h2 / h1).pow(2) / (h1.pow(2) + h2.pow(2) + eps)
+        shape_term = (ww * (b1_x1 - b2_x1).pow(2) + hh * (b1_y1 - b2_y1).pow(2)) / c2
+        iou = iou - shape_term
+        if Inner:
+            return iou * inner_iou
+        return iou
+
+    # MPDIoU (Minimum Point Distance IoU)
+    if MPDIoU:
+        d1 = (b1_x1 - b2_x1).pow(2) + (b1_y1 - b2_y1).pow(2)
+        d2 = (b1_x2 - b2_x2).pow(2) + (b1_y2 - b2_y2).pow(2)
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)
+        iou = iou - (d1 + d2) / (cw.pow(2) + ch.pow(2) + eps)
+        if Inner:
+            return iou * inner_iou
+        return iou
+
+    # NWD (Normalized Wasserstein Distance) for small object detection
+    if NWD:
+        x1c, y1c = (b1_x1 + b1_x2) / 2, (b1_y1 + b1_y2) / 2
+        x2c, y2c = (b2_x1 + b2_x2) / 2, (b2_y1 + b2_y2) / 2
+        w1n, h1n = w1 / 2, h1 / 2
+        w2n, h2n = w2 / 2, h2 / 2
+        c = (x1c - x2c).pow(2) + (y1c - y2c).pow(2) + ((w1n - w2n).pow(2) + (h1n - h2n).pow(2)) / 2
+        nwd = torch.exp(-c.sqrt() / 2)
+        if Inner:
+            return nwd * inner_iou
+        return nwd
+
     if CIoU or DIoU or GIoU:
         cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
         ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height

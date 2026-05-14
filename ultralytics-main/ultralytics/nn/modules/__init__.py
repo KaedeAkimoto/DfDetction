@@ -58,6 +58,13 @@ from .block import (
     SCDown,
     LSKBlock,
     C2fLSK,
+    C2fEMA,
+    C2fGSConv,
+    C2fAKConv,
+    BiFormerBlock,
+    C2fBiFormer,
+    C2fDBB,
+    C2PSA_MSDA,
 )
 from .conv import (
     CBAM,
@@ -74,6 +81,11 @@ from .conv import (
     LightConv,
     RepConv,
     SpatialAttention,
+    EMA,
+    GSConv,
+    AKConv,
+    DyHeadBlock,
+    MSDA,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (

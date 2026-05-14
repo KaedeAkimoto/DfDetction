@@ -91,17 +91,19 @@ class DFLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses during training."""
 
-    def __init__(self, reg_max=16, inner_iou=False, inner_ratio=0.7):
+    def __init__(self, reg_max=16, iou_type='CIoU', inner_iou=False, inner_ratio=0.7):
         """Initialize the BboxLoss module with regularization maximum and DFL settings."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
         self.inner_iou = inner_iou
         self.inner_ratio = inner_ratio
+        self.iou_type = iou_type
 
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """IoU loss."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True, Inner=self.inner_iou, ratio=self.inner_ratio)
+        iou_kwargs = {'xywh': False, self.iou_type: True, 'Inner': self.inner_iou, 'ratio': self.inner_ratio}
+        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], **iou_kwargs)
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
         # DFL loss
@@ -176,7 +178,7 @@ class v8DetectionLoss:
         self.use_dfl = m.reg_max > 1
 
         self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
-        self.bbox_loss = BboxLoss(m.reg_max, inner_iou=getattr(h, 'inner_iou', False), inner_ratio=getattr(h, 'inner_ratio', 0.7)).to(device)
+        self.bbox_loss = BboxLoss(m.reg_max, iou_type=getattr(h, 'iou_type', 'CIoU'), inner_iou=getattr(h, 'inner_iou', False), inner_ratio=getattr(h, 'inner_ratio', 0.7)).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets, batch_size, scale_tensor):

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
-from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
+from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad, EMA, GSConv, AKConv, DyHeadBlock, MSDA
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -51,6 +51,13 @@ __all__ = (
     "SCDown",
     "LSKBlock",
     "C2fLSK",
+    "C2fEMA",
+    "C2fGSConv",
+    "C2fAKConv",
+    "BiFormerBlock",
+    "C2fBiFormer",
+    "C2fDBB",
+    "C2PSA_MSDA",
 )
 
 
@@ -1175,3 +1182,107 @@ class SCDown(nn.Module):
     def forward(self, x):
         """Applies convolution and downsampling to the input tensor in the SCDown module."""
         return self.cv2(self.cv1(x))
+
+
+class C2fEMA(C2f):
+    """C2f module with EMA (Efficient Multi-Scale Attention) for enhanced feature extraction."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(EMA(self.c) for _ in range(n))
+
+
+class C2fGSConv(C2f):
+    """C2f module with GSConv for efficient feature fusion in neck."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(GSConv(self.c, self.c) for _ in range(n))
+
+
+class C2fAKConv(C2f):
+    """C2f module with AKConv for alterable kernel convolution."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(AKConv(self.c, self.c) for _ in range(n))
+
+
+class BiFormerBlock(nn.Module):
+    """Bi-Level Routing Attention block for dynamic sparse attention.
+
+    Based on: "BiFormer: Vision Transformer with Bi-Level Routing Attention" (CVPR 2023).
+    Uses a simplified top-k routing mechanism for efficient attention.
+    """
+
+    def __init__(self, c, num_heads=4, block_size=4, topk=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.block_size = block_size
+        self.topk = topk
+        self.head_dim = c // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        self.qkv = Conv(c, c * 3, 1, act=False)
+        self.proj = Conv(c, c, 1, act=False)
+        self.pe = Conv(c, c, 3, 1, g=c, act=False)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        N = H * W
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, 1)
+
+        q = q.view(B, self.num_heads, self.head_dim, N).transpose(-2, -1)
+        k = k.view(B, self.num_heads, self.head_dim, N).transpose(-2, -1)
+        v = v.view(B, self.num_heads, self.head_dim, N).transpose(-2, -1)
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        out = (attn @ v).transpose(-2, -1).reshape(B, C, H, W)
+        out = self.proj(out) + self.pe(v.reshape(B, C, H, W))
+        return out
+
+
+class C2fBiFormer(C2f):
+    """C2f module with BiFormer attention blocks."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(BiFormerBlock(self.c) for _ in range(n))
+
+
+class DBBBlock(nn.Module):
+    """Diverse Branch Block (DBB) for multi-branch convolution fusion.
+
+    Based on: "Diverse Branch Block: Building a Convolution as an Inception-like Unit"
+    (CVPR 2021). Uses multiple parallel branches that can be fused at inference.
+    """
+
+    def __init__(self, c1, c2, k=3, s=1):
+        super().__init__()
+        self.cv1 = Conv(c1, c2, k, s)
+        self.cv2 = Conv(c1, c2, 1, s)
+        self.cv3 = nn.Sequential(
+            Conv(c1, c2, k, s, g=c1),
+            Conv(c2, c2, 1, 1),
+        )
+
+    def forward(self, x):
+        return self.cv1(x) + self.cv2(x) + self.cv3(x)
+
+
+class C2fDBB(C2f):
+    """C2f module with Diverse Branch Blocks for enhanced feature extraction."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(DBBBlock(self.c, self.c) for _ in range(n))
+
+
+class C2PSA_MSDA(C2PSA):
+    """C2PSA module with Multi-Scale Dilated Attention (MSDA) replacing standard PSA blocks."""
+
+    def __init__(self, c1, c2, n=1, e=0.5):
+        super().__init__(c1, c2, n, e)
+        self.m = nn.Sequential(*(MSDA(self.c) for _ in range(n)))
