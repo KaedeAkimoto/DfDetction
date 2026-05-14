@@ -30,7 +30,8 @@ def train(
     model = None
     if load_weight:
         assert train_model.load_weight is not None, "load_weight is None"
-        model = YOLO(train_model.load_weight)
+        model = YOLO(train_model.model)
+        model.load(train_model.load_weight)
     else: 
         model = YOLO(train_model.model)
 
@@ -61,7 +62,36 @@ def train(
 
 
 def main():
+    # log = []
+
+    # for plan in [
+    #         HyperParameters._6v0_RUN,
+    #         HyperParameters._7v0_RUN,
+    #         HyperParameters._8v0_RUN,
+    #         HyperParameters._9v0_RUN,
+    #     ]:
+    #     try: 
+    #         log.append(f"train {plan.model}")
+    #         print(log)
+    #         train(plan,controls=update_control_params)
+    #         log.append(f"train {plan.model} success")
+    #         print(log)
+    #     except Exception as e:
+    #         log.append(f"train {plan.model} failed")
+    #         log.append(repr(e))
+    #         print(log)
+        
+    #     finally:
+    #         log.append(f"train Round end {plan.model}")
+    #         print(log)
+
+    # print(log)
+    # train(HyperParameters._6v0_RUN,controls=update_control_params)
+
+
     train(HyperParameters._6v0_RUN,controls=update_control_params)
+
+    # train(HyperParameters._7v0_RUN,controls=update_control_params)
 
 
 

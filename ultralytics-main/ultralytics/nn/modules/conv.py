@@ -395,28 +395,32 @@ class EMA(nn.Module):
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
         self.gn = nn.GroupNorm(channels // factor, channels // factor)
-        self.conv1x1 = nn.Conv2d(channels // factor, channels // factor, kernel_size=1, stride=1, padding=0)
+        self.conv1x1 = nn.Conv2d(channels, channels // factor, kernel_size=1, stride=1, padding=0)
         self.conv3x3 = nn.Conv2d(channels // factor, channels // factor, kernel_size=3, stride=1, padding=1)
 
     def forward(self, x):
         b, c, h, w = x.size()
-        group_x = x.reshape(b, self.groups, -1, h, w)
-        x_h = self.pool_h(group_x)
-        x_w = self.pool_w(group_x).permute(0, 1, 2, 4, 3)
-        y = torch.cat([x_h, x_w], dim=4)
-        y = self.conv1x1(y.reshape(b * self.groups, -1, y.shape[3], y.shape[4]))
-        y = self.gn(y)
-        y = y.reshape(b, self.groups, -1, y.shape[2], y.shape[3])
-        x_h, x_w = y.split([h, w], dim=4)
-        x_w = x_w.permute(0, 1, 2, 4, 3)
-        x_h = x_h.sigmoid()
-        x_w = x_w.sigmoid()
+        # Pool on full feature map (no grouping)
+        x_h = self.pool_h(x)  # (b, c, h, 1)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)  # (b, c, w, 1)
+        y = torch.cat([x_h, x_w], dim=2)  # (b, c, h+w, 1)
+        y = self.conv1x1(y)  # (b, c//g, h+w, 1)
+        y = self.gn(y)  # (b, c//g, h+w, 1)
+        x_h, x_w = y.split([h, w], dim=2)  # (b, c//g, h, 1), (b, c//g, w, 1)
+        x_w = x_w.permute(0, 1, 3, 2)  # (b, c//g, 1, w)
+        x_h = x_h.sigmoid()  # (b, c//g, h, 1)
+        x_w = x_w.sigmoid()  # (b, c//g, 1, w)
 
-        x1 = group_x * x_h * x_w
-        x2 = self.conv3x3(group_x.reshape(b * self.groups, -1, h, w))
-        x2 = x2.reshape(b, self.groups, -1, h, w).sigmoid()
-        x_out = x1 * x2
-        x_out = x_out.reshape(b, -1, h, w)
+        # Group input and apply attention
+        group_x = x.reshape(b, self.groups, -1, h, w)  # (b, g, c//g, h, w)
+        x_h = x_h.reshape(b, 1, -1, h, 1)  # (b, 1, c//g, h, 1)
+        x_w = x_w.reshape(b, 1, -1, 1, w)  # (b, 1, c//g, 1, w)
+
+        x1 = group_x * x_h * x_w  # (b, g, c//g, h, w)
+        x2 = self.conv3x3(group_x.reshape(b * self.groups, -1, h, w))  # (b*g, c//g, h, w)
+        x2 = x2.reshape(b, self.groups, -1, h, w).sigmoid()  # (b, g, c//g, h, w)
+        x_out = x1 * x2  # (b, g, c//g, h, w)
+        x_out = x_out.reshape(b, -1, h, w)  # (b, c, h, w)
 
         return x_out
 
