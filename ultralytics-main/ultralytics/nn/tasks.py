@@ -76,6 +76,15 @@ from ultralytics.nn.modules import (
     AKConv,
     DyHeadBlock,
     MSDA,
+    PConv,
+    DCNv3,
+    AreaAttention,
+    DyHeadv3,
+    CSDNHead,
+    C2fPConv,
+    C2fDCNv3,
+    C2fA2,
+    C2fRELAN,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -346,11 +355,18 @@ class DetectionModel(BaseModel):
                 """Performs a forward pass through the model, handling different Detect subclass types accordingly."""
                 if self.end2end:
                     return self.forward(x)["one2many"]
-                return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
+                out = self.forward(x)
+                if isinstance(m, (Segment, Pose, OBB)):
+                    return out[0]
+                if isinstance(out, tuple):
+                    return out[1]
+                return out
 
+            self.eval()
             m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
             self.stride = m.stride
             m.bias_init()  # only run once
+            self.train()
         else:
             self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
 
@@ -1022,6 +1038,12 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2PSA_MSDA,
             GSConv,
             AKConv,
+            C2fPConv,
+            C2fDCNv3,
+            C2fA2,
+            C2fRELAN,
+            DyHeadv3,
+            CSDNHead,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1032,7 +1054,12 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                     max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2]
                 )  # num heads
 
-            args = [c1, c2, *args[1:]]
+            if m in {CSDNHead, DyHeadv3}:
+                num_heads_val = args[0] if len(args) > 0 else (6 if m is DyHeadv3 else 4)
+                c2 = c1
+                args = [c1, num_heads_val]
+            else:
+                args = [c1, c2, *args[1:]]
             if m in {
                 BottleneckCSP,
                 C1,
@@ -1055,6 +1082,10 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2fBiFormer,
                 C2fDBB,
                 C2PSA_MSDA,
+                C2fPConv,
+                C2fDCNv3,
+                C2fA2,
+                C2fRELAN,
             }:
                 args.insert(2, n)  # number of repeats
                 n = 1

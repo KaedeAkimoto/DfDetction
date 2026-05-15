@@ -11,6 +11,13 @@ results_tuple = Annotated[tuple[yolo_result_set, yolo_result_set], "(model.train
 
 
 def update_control_params(model: YOLO, params: dict): 
+    """
+        加载 checkpoint 时 model.overrides 和 model.model.args 指向同一个 dict, 校验参数会报错.
+        在设置控制参数前断开引用， model.overrides 复制为新 dict, 不会进入 trainer 的参数校验.
+    """
+    if model.overrides is model.model.args:
+        model.overrides = dict(model.overrides)
+
     for k, v in params.items():
         model.model.args[k] = v
 
@@ -30,8 +37,7 @@ def train(
     model = None
     if load_weight:
         assert train_model.load_weight is not None, "load_weight is None"
-        model = YOLO(train_model.model)
-        model.load(train_model.load_weight)
+        model = YOLO(train_model.load_weight)
     else: 
         model = YOLO(train_model.model)
 
@@ -62,36 +68,9 @@ def train(
 
 
 def main():
-    # log = []
 
-    # for plan in [
-    #         HyperParameters._6v0_RUN,
-    #         HyperParameters._7v0_RUN,
-    #         HyperParameters._8v0_RUN,
-    #         HyperParameters._9v0_RUN,
-    #     ]:
-    #     try: 
-    #         log.append(f"train {plan.model}")
-    #         print(log)
-    #         train(plan,controls=update_control_params)
-    #         log.append(f"train {plan.model} success")
-    #         print(log)
-    #     except Exception as e:
-    #         log.append(f"train {plan.model} failed")
-    #         log.append(repr(e))
-    #         print(log)
-        
-    #     finally:
-    #         log.append(f"train Round end {plan.model}")
-    #         print(log)
+    train(HyperParameters._9v0_RUN, controls=update_control_params)
 
-    # print(log)
-    # train(HyperParameters._6v0_RUN,controls=update_control_params)
-
-
-    train(HyperParameters._6v0_RUN,controls=update_control_params)
-
-    # train(HyperParameters._7v0_RUN,controls=update_control_params)
 
 
 

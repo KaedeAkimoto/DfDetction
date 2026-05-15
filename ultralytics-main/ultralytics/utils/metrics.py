@@ -73,6 +73,8 @@ def box_iou(box1, box2, eps=1e-7):
 
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, Inner=False, ratio=0.7,
              WIoU=False, ShapeIoU=False, MPDIoU=False, NWD=False,
+             FocalerMPDIoU=False, AIoU=False, FocalerNWD=False,
+             focaler_d=0.0, focaler_u=0.95,
              eps=1e-7):
     """
     Calculate Intersection over Union (IoU) of box1(1, 4) to box2(n, 4).
@@ -91,6 +93,11 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, Inner=Fa
         ShapeIoU (bool, optional): If True, use Shape-IoU considering shape and scale. Defaults to False.
         MPDIoU (bool, optional): If True, use MPDIoU based on minimum point distance. Defaults to False.
         NWD (bool, optional): If True, use Normalized Wasserstein Distance for small objects. Defaults to False.
+        FocalerMPDIoU (bool, optional): If True, use Focaler-MPDIoU combining Focaler linear interval mapping with MPDIoU. Defaults to False.
+        AIoU (bool, optional): If True, use Autonomous IoU with adaptive dynamic non-monotonic focusing. Defaults to False.
+        FocalerNWD (bool, optional): If True, use Focaler-NWD combining Focaler with NWD. Defaults to False.
+        focaler_d (float, optional): Lower bound for Focaler linear interval mapping. Defaults to 0.0.
+        focaler_u (float, optional): Upper bound for Focaler linear interval mapping. Defaults to 0.95.
         eps (float, optional): A small value to avoid division by zero. Defaults to 1e-7.
 
     Returns:
@@ -186,6 +193,53 @@ def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, Inner=Fa
         if Inner:
             return nwd * inner_iou
         return nwd
+
+    # Focaler-MPDIoU: Focaler linear interval mapping + MPDIoU
+    if FocalerMPDIoU:
+        d1 = (b1_x1 - b2_x1).pow(2) + (b1_y1 - b2_y1).pow(2)
+        d2 = (b1_x2 - b2_x2).pow(2) + (b1_y2 - b2_y2).pow(2)
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)
+        mpdiou = iou - (d1 + d2) / (cw.pow(2) + ch.pow(2) + eps)
+        # Focaler linear interval mapping
+        mpdiou = torch.clamp(mpdiou, min=focaler_d, max=focaler_u)
+        mpdiou = (mpdiou - focaler_d) / (focaler_u - focaler_d + eps)
+        if Inner:
+            return mpdiou * inner_iou
+        return mpdiou
+
+    # AIoU (Autonomous IoU): adaptive dynamic non-monotonic focusing
+    if AIoU:
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)
+        c2 = cw.pow(2) + ch.pow(2) + eps
+        rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4
+        aiou = 1 - iou + (rho2 / c2)
+        # Adaptive dynamic non-monotonic focusing
+        with torch.no_grad():
+            r = aiou.detach() / aiou.mean()
+            beta = r / (r.mean() + eps)
+            # Adaptive focusing factor
+            focusing = 1.0 / (1.0 + beta.pow(2))
+        iou = aiou * focusing
+        if Inner:
+            return iou * inner_iou
+        return iou
+
+    # Focaler-NWD: Focaler linear interval mapping + NWD
+    if FocalerNWD:
+        x1c, y1c = (b1_x1 + b1_x2) / 2, (b1_y1 + b1_y2) / 2
+        x2c, y2c = (b2_x1 + b2_x2) / 2, (b2_y1 + b2_y2) / 2
+        w1n, h1n = w1 / 2, h1 / 2
+        w2n, h2n = w2 / 2, h2 / 2
+        c = (x1c - x2c).pow(2) + (y1c - y2c).pow(2) + ((w1n - w2n).pow(2) + (h1n - h2n).pow(2)) / 2
+        fnwd = torch.exp(-c.sqrt() / 2)
+        # Focaler linear interval mapping
+        fnwd = torch.clamp(fnwd, min=focaler_d, max=focaler_u)
+        fnwd = (fnwd - focaler_d) / (focaler_u - focaler_d + eps)
+        if Inner:
+            return fnwd * inner_iou
+        return fnwd
 
     if CIoU or DIoU or GIoU:
         cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width

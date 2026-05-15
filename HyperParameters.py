@@ -7,6 +7,7 @@ BaseModelParameters = Namespace (
         device=0,
         workers=0,
         data='DefectDetection.yaml',
+        save_period=5,
 )
 
 
@@ -114,7 +115,7 @@ HyperParameters = Namespace (
     ),
     _7v0_RUN=Namespace (
         model='yolo11_fix_7.yaml',
-        batch=16,
+        batch=44,
         amp=True,
         cos_lr=True,
         warmup_epochs=5,
@@ -143,7 +144,7 @@ HyperParameters = Namespace (
     ),
     _9v0_RUN=Namespace (
         model='yolo11_fix_9.yaml',
-        batch=36,
+        batch=48,
         cos_lr=True,
         warmup_epochs=5,
         label_smoothing=0.1,
@@ -153,6 +154,67 @@ HyperParameters = Namespace (
         **TrainHyperParameters.FullRounds.__dict__,
         control_params=package_params(
             iou_type='MPDIoU',
+        ),
+    ),
+    _10v0_RUN=Namespace (
+        model='yolo11_fix_10.yaml',
+        batch=48,
+        cos_lr=True,
+        warmup_epochs=5,
+        label_smoothing=0.1,
+        weight_decay=0.001,
+        dropout=0.1,
+        project='runs/train/_10v0_RUN',
+        **TrainHyperParameters.FullRounds.__dict__,
+        control_params=package_params(
+            iou_type='FocalerMPDIoU',
+            focaler_d=0.0,
+            focaler_u=0.95,
+        ),
+    ),
+    _11v0_RUN=Namespace (
+        model='yolo11_fix_11.yaml',
+        batch=32,
+        amp=True,
+        cos_lr=True,
+        warmup_epochs=5,
+        label_smoothing=0.1,
+        weight_decay=0.001,
+        dropout=0.1,
+        project='runs/train/_11v0_RUN',
+        **TrainHyperParameters.FullRounds.__dict__,
+        control_params=package_params(
+            iou_type='AIoU',
+        ),
+    ),
+    _12v0_RUN=Namespace (
+        model='yolo11_fix_12.yaml',
+        batch=36,
+        cos_lr=True,
+        warmup_epochs=5,
+        label_smoothing=0.1,
+        weight_decay=0.001,
+        dropout=0.1,
+        project='runs/train/_12v0_RUN',
+        **TrainHyperParameters.FullRounds.__dict__,
+        control_params=package_params(
+            iou_type='FocalerNWD',
+            focaler_d=0.0,
+            focaler_u=0.95,
+        ),
+    ),
+    _13v0_RUN=Namespace (
+        model='yolo11_fix_13.yaml',
+        batch=32,
+        cos_lr=True,
+        warmup_epochs=5,
+        label_smoothing=0.1,
+        weight_decay=0.001,
+        dropout=0.1,
+        project='runs/train/_13v0_RUN',
+        **TrainHyperParameters.FullRounds.__dict__,
+        control_params=package_params(
+            iou_type='AIoU',
         ),
     ),
 )

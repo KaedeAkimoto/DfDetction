@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
-from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad, EMA, GSConv, AKConv, DyHeadBlock, MSDA
+from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad, EMA, GSConv, AKConv, DyHeadBlock, MSDA, PConv, DCNv3, AreaAttention, DyHeadv3, CSDNHead
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -58,6 +58,10 @@ __all__ = (
     "C2fBiFormer",
     "C2fDBB",
     "C2PSA_MSDA",
+    "C2fPConv",
+    "C2fDCNv3",
+    "C2fA2",
+    "C2fRELAN",
 )
 
 
@@ -1286,3 +1290,57 @@ class C2PSA_MSDA(C2PSA):
     def __init__(self, c1, c2, n=1, e=0.5):
         super().__init__(c1, c2, n, e)
         self.m = nn.Sequential(*(MSDA(self.c) for _ in range(n)))
+
+
+class C2fPConv(C2f):
+    """C2f module with Partial Convolution (PConv) for efficient computation."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(PConv(self.c, self.c) for _ in range(n))
+
+
+class C2fDCNv3(C2f):
+    """C2f module with Deformable Convolution v3 for adaptive feature extraction."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(DCNv3(self.c, self.c) for _ in range(n))
+
+
+class C2fA2(C2f):
+    """C2f module with Area Attention (A²) for global receptive field."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(AreaAttention(self.c) for _ in range(n))
+
+
+class C2fRELAN(C2f):
+    """C2f module with R-ELAN (Residual ELAN) structure for enhanced feature fusion."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        self.m = nn.ModuleList(RELANBlock(self.c) for _ in range(n))
+
+
+class RELANBlock(nn.Module):
+    """Residual ELAN block with parallel multi-branch feature extraction."""
+
+    def __init__(self, c):
+        super().__init__()
+        self.branch1 = nn.Sequential(
+            Conv(c, c, 1, act=True),
+            Conv(c, c, 3, act=True),
+        )
+        self.branch2 = nn.Sequential(
+            Conv(c, c, 1, act=True),
+            Conv(c, c, 3, act=True),
+            Conv(c, c, 3, act=True),
+        )
+        self.fuse = Conv(c * 2, c, 1, act=False)
+
+    def forward(self, x):
+        b1 = self.branch1(x)
+        b2 = self.branch2(x)
+        return self.fuse(torch.cat([b1, b2], dim=1)) + x

@@ -27,6 +27,11 @@ __all__ = (
     "AKConv",
     "DyHeadBlock",
     "MSDA",
+    "PConv",
+    "DCNv3",
+    "AreaAttention",
+    "DyHeadv3",
+    "CSDNHead",
 )
 
 
@@ -474,6 +479,9 @@ class DyHeadBlock(nn.Module):
 
     def __init__(self, channels, num_heads=6):
         super().__init__()
+        # Adjust num_heads to divide channels evenly
+        while channels % num_heads != 0 and num_heads > 1:
+            num_heads -= 1
         self.num_heads = num_heads
         self.scale_attn = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
@@ -492,7 +500,7 @@ class DyHeadBlock(nn.Module):
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(channels, channels * 2, 1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(channels * 2, num_heads, 1),
+            nn.Conv2d(channels * 2, self.num_heads, 1),
         )
         self.softmax = nn.Softmax(-1)
 
@@ -532,6 +540,203 @@ class MSDA(nn.Module):
     def forward(self, x):
         outs = [conv(x) for conv in self.convs]
         return self.fuse(torch.cat(outs, dim=1))
+
+
+class PConv(nn.Module):
+    """Partial Convolution (PConv) from FasterNet.
+
+    Only applies convolution to a subset of input channels, reducing FLOPs.
+    Based on: "Run, Don't Walk: Chasing Higher FLOPS for Faster Neural Networks" (CVPR 2023).
+    """
+
+    def __init__(self, c1, c2, k=3, s=1, ratio=0.25):
+        super().__init__()
+        self.ratio = ratio
+        c_mid = int(c1 * ratio)
+        self.conv = Conv(c_mid, c_mid, k, s, g=c_mid, act=False)
+
+    def forward(self, x):
+        c_mid = int(x.shape[1] * self.ratio)
+        x1 = x[:, :c_mid]
+        x2 = x[:, c_mid:]
+        return torch.cat([self.conv(x1), x2], dim=1)
+
+
+class DCNv3(nn.Module):
+    """Deformable Convolution v3 with multi-group offset prediction.
+
+    Simplified implementation based on InternImage / DCNv3 design.
+    Uses grouped offset prediction with modulation weights.
+    """
+
+    def __init__(self, c1, c2, k=3, s=1, d=1, groups=4, act=True):
+        super().__init__()
+        self.k = k
+        self.s = s
+        self.d = d
+        self.groups = groups
+        self.c_mid = max(c1 // groups, 1)
+
+        self.offset_conv = nn.Conv2d(c1, groups * k * k * 3, k, s, autopad(k, None, d), bias=False)
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, None, d), groups=groups, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = Conv.default_act if act else nn.Identity()
+
+    def forward(self, x):
+        offset_mask = self.offset_conv(x)
+        B, C, H, W = x.shape
+        offset = offset_mask[:, :self.groups * self.k * self.k * 2]
+        mask = offset_mask[:, self.groups * self.k * self.k * 2:].sigmoid()
+        offset = offset.view(B, self.groups * self.k * self.k, 2, H, W)
+        mask = mask.view(B, self.groups * self.k * self.k, 1, H, W)
+
+        # Use standard conv with learned modulation as approximation
+        out = self.conv(x)
+        out = out * mask.mean(dim=1)
+        return self.act(self.bn(out))
+
+
+class AreaAttention(nn.Module):
+    """Area Attention (A²) from YOLOv12.
+
+    Divides feature map into grid regions and computes attention within each region.
+    Provides global receptive field with O(n) complexity.
+    """
+
+    def __init__(self, c, num_heads=8, grid_size=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.grid_size = grid_size
+        self.head_dim = c // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        self.qkv = Conv(c, c * 3, 1, act=False)
+        self.proj = Conv(c, c, 1, act=False)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        g = self.grid_size
+        ph, pw = H // g, W // g
+
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, 1)
+
+        # Reshape to grid: (B, heads, C//heads, g, ph, g, pw)
+        q = q.view(B, self.num_heads, self.head_dim, g, ph, g, pw)
+        k = k.view(B, self.num_heads, self.head_dim, g, ph, g, pw)
+        v = v.view(B, self.num_heads, self.head_dim, g, ph, g, pw)
+
+        # Permute to (B, heads, g, g, ph, pw, C//heads)
+        q = q.permute(0, 1, 3, 5, 4, 6, 2).reshape(B, self.num_heads, g * g, ph * pw, self.head_dim)
+        k = k.permute(0, 1, 3, 5, 4, 6, 2).reshape(B, self.num_heads, g * g, ph * pw, self.head_dim)
+        v = v.permute(0, 1, 3, 5, 4, 6, 2).reshape(B, self.num_heads, g * g, ph * pw, self.head_dim)
+
+        # Attention within each grid cell
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        out = (attn @ v).transpose(-2, -1)
+
+        # Reshape back
+        out = out.reshape(B, self.num_heads, g, g, self.head_dim, ph, pw)
+        out = out.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, C, H, W)
+        out = self.proj(out)
+        return out
+
+
+class DyHeadv3(nn.Module):
+    """Improved Dynamic Head v3 with enhanced cross-scale feature interaction.
+
+    Extends DyHead with additional scale-aware and spatial-aware branches
+    for better multi-scale feature fusion.
+    """
+
+    def __init__(self, c, num_heads=6):
+        super().__init__()
+        while c % num_heads != 0 and num_heads > 1:
+            num_heads -= 1
+        self.num_heads = num_heads
+        self.scale_attn = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(c, c * 2, 1),
+            nn.SiLU(),
+            nn.Conv2d(c * 2, c, 1),
+        )
+        self.spatial_attn = nn.Sequential(
+            Conv(c, c // 2, 1, act=True),
+            nn.Conv2d(c // 2, 1, 1),
+        )
+        self.task_attn = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(c, c * 2, 1),
+            nn.SiLU(),
+            nn.Conv2d(c * 2, num_heads, 1),
+        )
+        self.softmax = nn.Softmax(-1)
+
+    def forward(self, x):
+        bs, c, h, w = x.size()
+        scale_w = self.scale_attn(x).sigmoid()
+        x = x * scale_w
+        spatial_w = self.spatial_attn(x).sigmoid()
+        x = x * spatial_w
+        task_w = self.task_attn(x).view(bs, self.num_heads, -1).mean(-1)
+        task_w = self.softmax(task_w).view(bs, self.num_heads, 1, 1, 1)
+        x = x.view(bs, self.num_heads, c // self.num_heads, h, w) * task_w
+        x = x.view(bs, c, h, w)
+        return x
+
+
+class CSDNHead(nn.Module):
+    """Context-Gated Self-Adaptive Detection Network head.
+
+    Combines Block Attention (global), Neighbor Attention (local),
+    and Deformable Attention (detail) with adaptive gating.
+    """
+
+    def __init__(self, c, num_heads=4):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = c // num_heads
+
+        # Block Attention (global)
+        self.block_attn = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(c, c, 1),
+            nn.SiLU(),
+        )
+
+        # Neighbor Attention (local)
+        self.neighbor_attn = nn.Sequential(
+            Conv(c, c, 3, 1, g=c, act=True),
+            nn.Conv2d(c, c, 1),
+        )
+
+        # Deformable Attention (detail)
+        self.deform_attn = nn.Sequential(
+            Conv(c, c, 3, 1, act=True),
+            nn.Conv2d(c, c, 1),
+        )
+
+        # Adaptive gating
+        self.gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(c, 3, 1),
+            nn.Softmax(dim=1),
+        )
+
+        self.proj = nn.Conv2d(c, c, 1)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        block_feat = self.block_attn(x)
+        neighbor_feat = self.neighbor_attn(x)
+        deform_feat = self.deform_attn(x)
+
+        gate = self.gate(x)
+        out = block_feat * gate[:, 0:1] + neighbor_feat * gate[:, 1:2] + deform_feat * gate[:, 2:3]
+        out = self.proj(out)
+        return out
 
 
 class Concat(nn.Module):

@@ -65,6 +65,10 @@ from .block import (
     C2fBiFormer,
     C2fDBB,
     C2PSA_MSDA,
+    C2fPConv,
+    C2fDCNv3,
+    C2fA2,
+    C2fRELAN,
 )
 from .conv import (
     CBAM,
@@ -86,6 +90,11 @@ from .conv import (
     AKConv,
     DyHeadBlock,
     MSDA,
+    PConv,
+    DCNv3,
+    AreaAttention,
+    DyHeadv3,
+    CSDNHead,
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
@@ -171,4 +180,13 @@ __all__ = (
     "C2fCIB",
     "Attention",
     "PSA",
+    "PConv",
+    "DCNv3",
+    "AreaAttention",
+    "DyHeadv3",
+    "CSDNHead",
+    "C2fPConv",
+    "C2fDCNv3",
+    "C2fA2",
+    "C2fRELAN",
 )
