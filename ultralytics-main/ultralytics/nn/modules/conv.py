@@ -6,6 +6,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 __all__ = (
     "Conv",
@@ -616,7 +617,17 @@ class AreaAttention(nn.Module):
     def forward(self, x):
         B, C, H, W = x.shape
         g = self.grid_size
-        ph, pw = H // g, W // g
+
+        # Pad to make H, W divisible by g
+        pad_h = (g - H % g) % g
+        pad_w = (g - W % g) % g
+        if pad_h > 0 or pad_w > 0:
+            x = F.pad(x, (0, pad_w, 0, pad_h))
+            _, _, Hp, Wp = x.shape
+        else:
+            Hp, Wp = H, W
+
+        ph, pw = Hp // g, Wp // g
 
         qkv = self.qkv(x)
         q, k, v = qkv.chunk(3, 1)
@@ -638,8 +649,12 @@ class AreaAttention(nn.Module):
 
         # Reshape back
         out = out.reshape(B, self.num_heads, g, g, self.head_dim, ph, pw)
-        out = out.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, C, H, W)
+        out = out.permute(0, 1, 4, 2, 5, 3, 6).reshape(B, C, Hp, Wp)
         out = self.proj(out)
+
+        # Crop back to original size
+        if pad_h > 0 or pad_w > 0:
+            out = out[:, :, :H, :W]
         return out
 
 
